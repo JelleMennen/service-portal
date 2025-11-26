@@ -27,6 +27,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// als de tabel nog niet is aangemaakt, wordt die aangemaakt.
 	if err := ensureTable(db); err != nil {
 		log.Fatal(err)
 	}

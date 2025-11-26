@@ -39,13 +39,13 @@ func main() {
 		return c.SendString("OK")
 	})
 
-	// onboard functie 
+	// onboard functie
 	app.Post("/onboard", func(c *fiber.Ctx) error {
 		var body struct {
-			Name string `json:"name"`
-			Email string `json:"email"`
+			Name       string `json:"name"`
+			Email      string `json:"email"`
 			Department string `json:"department"`
-			Role string `json:"role"`
+			Role       string `json:"role"`
 		}
 
 		if err := c.BodyParser(&body); err != nil {
@@ -56,11 +56,11 @@ func main() {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing fields"})
 		}
 
-		var id int 
+		var id int
 		err := db.QueryRow(`
 			INSERT INTO employees (name, email, department, role, status)
 			VALUES ($1, $2, $3, $4, 'active')
-			RETURNING id`, 
+			RETURNING id`,
 			body.Name, body.Email, body.Department, body.Role,
 		).Scan(&id)
 		if err != nil {
@@ -69,7 +69,7 @@ func main() {
 		}
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message": "employee onboarded",
-			"id": id,
+			"id":      id,
 		})
 	})
 
@@ -91,9 +91,6 @@ func ensureTable(db *sql.DB) error {
 	_, err := db.Exec(query)
 	return err
 }
-
-
-
 
 /*
 	type employee struct {
@@ -200,3 +197,4 @@ func offboarding() {
 func rol_status_wijziging() {
 
 }
+*/

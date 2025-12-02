@@ -60,8 +60,32 @@ func main() {
 		return c.SendString("OK")
 	})
 
-	//
 	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/index.html")
+	})
+
+	app.Get("/offboard", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/offboard.html")
+	})
+
+	app.Get("/change-role", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/change_role.html")
+	})
+
+	app.Get("/password-reset", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/password_reset.html")
+	})
+
+	app.Get("/register-device", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/register_device.html")
+	})
+
+	app.Get("/login", func(c *fiber.Ctx) error {
+		return c.SendFile("ui/login.html")
+	})
+
+	// frontend naar backend onboarding
+	app.Get("/onboard", func(c *fiber.Ctx) error {
 		return c.SendFile("ui/onboard.html")
 	})
 
@@ -221,7 +245,7 @@ func createKeycloakUser(token string, email string) error {
 	}
 	defer resp.Body.Close()
 
-	// 201 = created, 409 = bestaat al → voor nu ook ok
+	// 201 = created, 409 = bestaat al
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("keycloak create user error: %s - %s", resp.Status, string(body))

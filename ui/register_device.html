@@ -20,10 +20,14 @@
 
         <div>
             <label for ="os-type">Operating system:</label>
-            <input id="os_type" name="os_type" type="text" placeholder="Linux / Windows" required/>
-        </div>
+            <select>
+                <option value="" disabled selected>Kies een OS</option>
+                <option value="Windows">Windows</option>
+                <option value="Linux">Linux</option>
+            </select> 
+      </div>
 
-        <button type="submit">Update</button>
+        <button type="submit">geneer</button>
     </form>
 
     <h2>Generated script (example)</h2>

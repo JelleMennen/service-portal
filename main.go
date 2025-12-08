@@ -64,6 +64,7 @@ func main() {
 		return c.SendFile("ui/index.html")
 	})
 
+	//offboarding frontend naar backend
 	app.Get("/offboard", func(c *fiber.Ctx) error {
 		return c.SendFile("ui/offboard.html")
 	})
@@ -136,6 +137,50 @@ func main() {
 			"message": "employee onboarded",
 			"id":      id,
 		})
+	})
+
+	//offbaording
+	app.Post("/offboard", func(c *fiber.Ctx) error {
+		var body struct {
+			Email string `json:"email" form:"email"`
+		}
+
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
+		}
+
+		if body.Email == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "missing email"})
+		}
+
+		//Database status naar inactive
+		_, err := db.Exec(`UPDATE employees SET status='inactive' WHERE email=$1`, body.Email)
+		if err != nil {
+			log.Println("db error:", err)
+			return c.Status(500).JSON(fiber.Map{"error": "db update error"})
+		}
+
+		//Keycloak
+		token, err := getKeycloakAdminToken()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "token error"})
+		}
+
+		userID, err := getKeycloakUserID(token, body.Email)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "user lookup error"})
+		}
+
+		err = disableKeycloakUser(token, userID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "keycloak diable error"})
+		}
+
+		return c.JSON(fiber.Map{
+			"message": "employee offboarded",
+			"email":   body.Email,
+		})
+
 	})
 
 	log.Println("Service luistert op :8080")
@@ -249,6 +294,71 @@ func createKeycloakUser(token string, email string) error {
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("keycloak create user error: %s - %s", resp.Status, string(body))
+	}
+
+	return nil
+}
+
+// User ID ophalen
+func getKeycloakUserID(token, email string) (string, error) {
+	endpoint := fmt.Sprintf("%s/admin/realms/%s/users?email=%s", keycloakURL, keycloakRealm, url.QueryEscape(email))
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("lookup error: %s - %s", resp.Status, string(b))
+	}
+
+	var arr []struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&arr); err != nil {
+		return "", err
+	}
+
+	if len(arr) == 0 {
+		return "", fmt.Errorf("user not found")
+	}
+
+	return arr[0].ID, nil
+}
+
+// Keycloak user uitschakelen
+
+func disableKeycloakUser(token, userID string) error {
+	endpoint := fmt.Sprintf("%s/admin/realms/%s/users/%s", keycloakURL, keycloakRealm, userID)
+
+	payload := bytes.NewBuffer([]byte(`{"enabled": false}`))
+
+	req, err := http.NewRequest("PUT", endpoint, payload)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("disable error: %s - %s", resp.Status, string(b))
 	}
 
 	return nil

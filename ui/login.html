@@ -1,14 +1,33 @@
 <!DOCTYPE html>
-<html lang= "en">
+<html lang="en">
 <head>
-    <meta charset = "UTF-8">
+    <meta charset="UTF-8">
     <title>Login</title>
 </head>
 <body>
     <h1>Login</h1>
-    <p>In de definitieve versie wordt hier Keycloak gebruikt voor SSO.</p>
-    <p>Voor nu is dit een placeholder zodat de HTML-structuur compleet is.</p>
+
+    <form method="POST" action="/login">
+        <div>
+            <label for="email">Email:</label>
+            <input id="email" name="email" type="email" required />
+        </div>
+
+        <div>
+            <label for="password">Password:</label>
+            <input id="password" name="password" type="password" required />
+        </div>
+
+        <button type="submit">Login</button>
+    </form>
 
     <p><a href="/">Terug naar start</a></p>
+
+    <p style="margin-top:20px; color:gray;">
+        Test users:<br>
+        employee@example.com / Employee123!<br>
+        hr@example.com / Hr123!<br>
+        it@example.com / It123!
+    </p>
 </body>
 </html>

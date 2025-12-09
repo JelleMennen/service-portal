@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/session"
 	_ "github.com/lib/pq"
 )
 
@@ -20,7 +21,35 @@ var (
 	keycloakRealm = os.Getenv("KEYCLOAK_REALM")
 	keycloakAdmin = os.Getenv("KEYCLOAK_ADMIN")
 	keycloakPass  = os.Getenv("KEYCLOAK_ADMIN_PASSWORD")
+
+	store = session.New()
 )
+
+type AppUser struct {
+	Email    string
+	Password string
+	Role     string
+}
+
+var users = map[string]AppUser{
+	"employee@example.com": {
+		Email:    "employee@example.com",
+		Password: "Employee123!",
+		Role:     "employee",
+	},
+
+	"hr@example.com": {
+		Email:    "hr@example.com",
+		Password: "Hr123!",
+		Role:     "HR",
+	},
+
+	"it@example.com": {
+		Email:    "it@example.com",
+		Password: "It123!",
+		Role:     "IT",
+	},
+}
 
 func main() {
 	// kijkt of het in de env staat
@@ -60,24 +89,24 @@ func main() {
 		return c.SendString("OK")
 	})
 
-	app.Get("/", func(c *fiber.Ctx) error {
+	app.Get("/", requireRole("employee", "HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/index.html")
 	})
 
 	//offboarding frontend naar backend
-	app.Get("/offboard", func(c *fiber.Ctx) error {
+	app.Get("/offboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/offboard.html")
 	})
 
-	app.Get("/change-role", func(c *fiber.Ctx) error {
+	app.Get("/change-role", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/change_role.html")
 	})
 
-	app.Get("/password-reset", func(c *fiber.Ctx) error {
+	app.Get("/password-reset", requireRole("employee", "HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/password_reset.html")
 	})
 
-	app.Get("/register-device", func(c *fiber.Ctx) error {
+	app.Get("/register-device", requireRole("employee", "HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/register_device.html")
 	})
 
@@ -86,8 +115,33 @@ func main() {
 	})
 
 	// frontend naar backend onboarding
-	app.Get("/onboard", func(c *fiber.Ctx) error {
+	app.Get("/onboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		return c.SendFile("ui/onboard.html")
+	})
+
+	// login
+	app.Post("/login", func(c *fiber.Ctx) error {
+		type LoginBody struct {
+			Email    string `form:"email"`
+			Password string `form:"password"`
+		}
+
+		var body LoginBody
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(400).SendString("Invalid login body")
+		}
+
+		user, ok := users[body.Email]
+		if !ok || user.Password != body.Password {
+			return c.Status(401).SendString("Invalid credentials")
+		}
+
+		sess, _ := store.Get(c)
+		sess.Set("email", user.Email)
+		sess.Set("role", user.Role)
+		sess.Save()
+
+		return c.Redirect("/")
 	})
 
 	// onboard functie
@@ -363,3 +417,70 @@ func disableKeycloakUser(token, userID string) error {
 
 	return nil
 }
+
+//RBAC
+
+func getCurrentUser(c *fiber.Ctx) *AppUser {
+	sess, err := store.Get(c)
+	if err != nil {
+		return nil
+	}
+
+	emailVal := sess.Get("email")
+	if emailVal == nil {
+		return nil
+	}
+
+	email, ok := emailVal.(string)
+	if !ok || email == "" {
+		return nil
+	}
+
+	u, ok := users[email]
+	if !ok {
+		return nil
+	}
+
+	return &u
+}
+
+func requireRole(allowedRoles ...string) fiber.Handler {
+	allowed := make(map[string]bool)
+	for _, r := range allowedRoles {
+		allowed[r] = true
+	}
+
+	return func(c *fiber.Ctx) error {
+		user := getCurrentUser(c)
+		if user == nil {
+			return c.Redirect("/login")
+		}
+
+		if !allowed[user.Role] {
+			return c.Status(fiber.StatusForbidden).SendString("403 Forbidden")
+		}
+
+		return c.Next()
+	}
+}
+
+/* Voor SSO
+	oidcIssuerURL = os.Getenv("OIDC_ISSUER_URL")
+	oidcClientID = os.Getenv("OIDC_CLIENT_ID")
+	oidcClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	oidcRedirectURL = os.Getenv("OIDC_REDIRECT_URL")
+
+	publicBaseURL = os.Getenv("PUBLIC_BASE_URL")
+	sessionSecret = []byte(os.Getenv("SESSION_SECRET"))
+
+	oidcProvider *oidc.Provider
+	oidcVerifier *oidc.IDTokenVerifier
+	oauth2Config *oauth2.Config
+)
+
+type UserSession struct {
+	Subject string `json:"sub"`
+	Email string `json:"email"`
+	Roles []string `json:"roles"`
+}
+*/

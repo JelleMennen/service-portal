@@ -1,6 +1,8 @@
 module github.com/JelleMennen/service-portal
 
-go 1.22
+go 1.24.0
+
+toolchain go1.24.11
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.10
@@ -9,6 +11,8 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -18,5 +22,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
+	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 )

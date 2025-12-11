@@ -25,6 +25,7 @@ var (
 	store = session.New()
 )
 
+/* hardcoded RBAC
 type AppUser struct {
 	Email    string
 	Password string
@@ -50,6 +51,7 @@ var users = map[string]AppUser{
 		Role:     "IT",
 	},
 }
+*/
 
 func main() {
 	// kijkt of het in de env staat
@@ -131,14 +133,23 @@ func main() {
 			return c.Status(400).SendString("Invalid login body")
 		}
 
-		user, ok := users[body.Email]
-		if !ok || user.Password != body.Password {
-			return c.Status(401).SendString("Invalid credentials")
+		token, err := loginWithKeycloak(body.Email, body.Password)
+		if err != nil {
+			return c.Status(401).SendString("Invalid Keycloak Login")
+		}
+
+		roles, err := getKeycloakUserInfo(token)
+		if err != nil {
+			return c.Status(500).SendString("Failed to get roles")
+		}
+
+		if len(roles) == 0 {
+			return c.Status(403).SendString("No roles assigned")
 		}
 
 		sess, _ := store.Get(c)
-		sess.Set("email", user.Email)
-		sess.Set("role", user.Role)
+		sess.Set("email", body.Email)
+		sess.Set("roles", roles)
 		sess.Save()
 
 		return c.Redirect("/")
@@ -420,47 +431,105 @@ func disableKeycloakUser(token, userID string) error {
 
 //RBAC
 
-func getCurrentUser(c *fiber.Ctx) *AppUser {
-	sess, err := store.Get(c)
+func loginWithKeycloak(email, password string) (string, error) {
+	data := url.Values{}
+	data.Set("client_id", "admin-cli")
+	data.Set("grant_type", "password")
+	data.Set("username", email)
+	data.Set("password", password)
+	data.Set("scope", "openid email profile")
+
+	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", keycloakURL, keycloakRealm)
+	resp, err := http.PostForm(endpoint, data)
 	if err != nil {
-		return nil
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("login failed: %s", string(body))
 	}
 
-	emailVal := sess.Get("email")
-	if emailVal == nil {
-		return nil
+	var tokenRes struct {
+		AccessToken string `json:"access_token"`
 	}
 
-	email, ok := emailVal.(string)
-	if !ok || email == "" {
-		return nil
+	if err := json.NewDecoder(resp.Body).Decode(&tokenRes); err != nil {
+		return "", err
 	}
 
-	u, ok := users[email]
+	return tokenRes.AccessToken, nil
+
+}
+
+func getKeycloakUserInfo(token string) ([]string, error) {
+	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/userinfo", keycloakURL, keycloakRealm)
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	realmAcces, ok := data["realm_access"].(map[string]interface{})
 	if !ok {
-		return nil
+		return []string{}, nil
 	}
 
-	return &u
+	rolesRaw, ok := realmAcces["roles"].([]interface{})
+	if !ok {
+		return []string{}, nil
+	}
+
+	roles := []string{}
+	for _, r := range rolesRaw {
+		if s, ok := r.(string); ok {
+			roles = append(roles, s)
+		}
+	}
+
+	return roles, nil
+
 }
 
 func requireRole(allowedRoles ...string) fiber.Handler {
-	allowed := make(map[string]bool)
+	allowedMap := make(map[string]bool)
 	for _, r := range allowedRoles {
-		allowed[r] = true
+		allowedMap[r] = true
 	}
 
 	return func(c *fiber.Ctx) error {
-		user := getCurrentUser(c)
-		if user == nil {
+		sess, _ := store.Get(c)
+		rolesVal := sess.Get("roles")
+		if rolesVal == nil {
 			return c.Redirect("/login")
 		}
 
-		if !allowed[user.Role] {
-			return c.Status(fiber.StatusForbidden).SendString("403 Forbidden")
+		roles, ok := rolesVal.([]string)
+		if !ok {
+			return c.Status(403).SendString("Forbidden")
 		}
 
-		return c.Next()
+		for _, r := range roles {
+			if allowedMap[r] {
+				return c.Next()
+			}
+		}
+
+		return c.Status(403).SendString("Forbidden")
 	}
 }
 
@@ -483,4 +552,29 @@ type UserSession struct {
 	Email string `json:"email"`
 	Roles []string `json:"roles"`
 }
+*/
+
+/* Hardcoded rbac functie =
+func getCurrentUser(c *fiber.Ctx) *AppUser {
+sess, err := store.Get(c)
+if err != nil {
+return nil
+ }
+
+ emailVal := sess.Get("email")
+ if emailVal == nil {
+  return nil
+  }
+
+  email, ok := emailVal.(string)
+  if !ok || email == "" {
+  return nil
+   }
+
+   u, ok := users[email]
+   if !ok {
+   return nil
+    }
+
+	return &u }
 */

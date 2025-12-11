@@ -473,7 +473,7 @@ func extractRolesFromJWT(token string) ([]string, error) {
 
 	payloadPart := parts[1]
 
-	// Base64URL decoden (zonder padding)
+	// Base64URL decode (zonder padding)
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadPart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode token payload: %w", err)
@@ -484,22 +484,37 @@ func extractRolesFromJWT(token string) ([]string, error) {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	// realm_access: { "roles": ["IT", "HR", ...] }
-	ra, ok := payload["realm_access"].(map[string]interface{})
-	if !ok {
-		return []string{}, nil
-	}
+	rolesSet := make(map[string]bool)
 
-	rolesRaw, ok := ra["roles"].([]interface{})
-	if !ok {
-		return []string{}, nil
-	}
-
-	roles := []string{}
-	for _, r := range rolesRaw {
-		if s, ok := r.(string); ok {
-			roles = append(roles, s)
+	// 1) Realm roles
+	if ra, ok := payload["realm_access"].(map[string]interface{}); ok {
+		if rolesRaw, ok := ra["roles"].([]interface{}); ok {
+			for _, r := range rolesRaw {
+				if s, ok := r.(string); ok {
+					rolesSet[s] = true
+				}
+			}
 		}
+	}
+
+	// 2) Client roles (resource_access)
+	if resAcc, ok := payload["resource_access"].(map[string]interface{}); ok {
+		for _, v := range resAcc {
+			if clientRoles, ok := v.(map[string]interface{}); ok {
+				if rolesRaw, ok := clientRoles["roles"].([]interface{}); ok {
+					for _, r := range rolesRaw {
+						if s, ok := r.(string); ok {
+							rolesSet[s] = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	roles := make([]string, 0, len(rolesSet))
+	for r := range rolesSet {
+		roles = append(roles, r)
 	}
 
 	return roles, nil

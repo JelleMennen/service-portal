@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/session"
@@ -133,14 +135,10 @@ func main() {
 			return c.Status(400).SendString("Invalid login body")
 		}
 
-		token, err := loginWithKeycloak(body.Email, body.Password)
+		roles, err := loginWithKeycloak(body.Email, body.Password)
 		if err != nil {
+			log.Println("login error:", err)
 			return c.Status(401).SendString("Invalid Keycloak Login")
-		}
-
-		roles, err := getKeycloakUserInfo(token)
-		if err != nil {
-			return c.Status(500).SendString("Failed to get roles")
 		}
 
 		if len(roles) == 0 {
@@ -431,7 +429,7 @@ func disableKeycloakUser(token, userID string) error {
 
 //RBAC
 
-func loginWithKeycloak(email, password string) (string, error) {
+func loginWithKeycloak(email, password string) ([]string, error) {
 	data := url.Values{}
 	data.Set("client_id", "admin-cli")
 	data.Set("grant_type", "password")
@@ -442,13 +440,13 @@ func loginWithKeycloak(email, password string) (string, error) {
 	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", keycloakURL, keycloakRealm)
 	resp, err := http.PostForm(endpoint, data)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("login failed: %s", string(body))
+		return nil, fmt.Errorf("login failed: %s", string(body))
 	}
 
 	var tokenRes struct {
@@ -456,12 +454,58 @@ func loginWithKeycloak(email, password string) (string, error) {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&tokenRes); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return tokenRes.AccessToken, nil
+	roles, err := extractRolesFromJWT(tokenRes.AccessToken)
+	if err != nil {
+		return nil, err
+	}
 
+	return roles, nil
 }
+
+func extractRolesFromJWT(token string) ([]string, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+
+	payloadPart := parts[1]
+
+	// Base64URL decoden (zonder padding)
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadPart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token payload: %w", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+
+	// realm_access: { "roles": ["IT", "HR", ...] }
+	ra, ok := payload["realm_access"].(map[string]interface{})
+	if !ok {
+		return []string{}, nil
+	}
+
+	rolesRaw, ok := ra["roles"].([]interface{})
+	if !ok {
+		return []string{}, nil
+	}
+
+	roles := []string{}
+	for _, r := range rolesRaw {
+		if s, ok := r.(string); ok {
+			roles = append(roles, s)
+		}
+	}
+
+	return roles, nil
+}
+
+/*
 
 func getKeycloakUserInfo(token string) ([]string, error) {
 	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/userinfo", keycloakURL, keycloakRealm)
@@ -504,6 +548,8 @@ func getKeycloakUserInfo(token string) ([]string, error) {
 	return roles, nil
 
 }
+
+*/
 
 func requireRole(allowedRoles ...string) fiber.Handler {
 	allowedMap := make(map[string]bool)
@@ -572,9 +618,5 @@ return nil
    }
 
    u, ok := users[email]
-   if !ok {
-   return nil
-    }
-
-	return &u }
+   if !ok { return nil } return &u }
 */

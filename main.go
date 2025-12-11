@@ -86,8 +86,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//fix om er voor te zorgen dat de juiste realm roles bestaan
-
+	/*fix om er voor te zorgen dat de juiste realm roles bestaan
 	adminToken, err := getKeycloakAdminToken()
 	if err != nil {
 		log.Fatal("keycloak admin token error:", err)
@@ -96,6 +95,7 @@ func main() {
 	if err := ensureRealmRoles(adminToken, []string{"IT", "HR", "employee"}); err != nil {
 		log.Fatal("failed to ensure realm roles:", err)
 	}
+	*/
 
 	app := fiber.New()
 
@@ -368,57 +368,6 @@ func createKeycloakUser(token string, email string) error {
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("keycloak create user error: %s - %s", resp.Status, string(body))
-	}
-
-	return nil
-}
-
-// zorgt er voor dat alle rollen bestaan
-
-type keycloakRole struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-func ensureRealmRoles(token string, roles []string) error {
-	for _, r := range roles {
-		if err := createRealmRole(token, r); err != nil {
-			return fmt.Errorf("create role %s: %w", r, err)
-		}
-	}
-	return nil
-}
-
-func createRealmRole(token, name string) error {
-	role := keycloakRole{
-		Name:        name,
-		Description: fmt.Sprintf("Role %s for self-service portal", name),
-	}
-
-	buf := new(bytes.Buffer)
-	if err := json.NewEncoder(buf).Encode(role); err != nil {
-		return err
-	}
-
-	endpoint := fmt.Sprintf("%s/admin/realms/%s/roles", keycloakURL, keycloakRealm)
-	req, err := http.NewRequest("POST", endpoint, buf)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// 201 = aangemaakt, 409 = bestaat al → allebei ok
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create role %s failed: %s - %s", name, resp.Status, string(body))
 	}
 
 	return nil

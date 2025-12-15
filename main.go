@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -11,11 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/session"
 	_ "github.com/lib/pq"
+	"golang.org/x/oauth2"
 )
 
 var (
@@ -24,10 +27,19 @@ var (
 	keycloakAdmin = os.Getenv("KEYCLOAK_ADMIN")
 	keycloakPass  = os.Getenv("KEYCLOAK_ADMIN_PASSWORD")
 
+	oidcIssuerURL    = os.Getenv("OIDC_ISSUER_URL")
+	oidcClientID     = os.Getenv("OIDC_CLIENT_ID")
+	oidcClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	oidcRedirectURL  = os.Getenv("OIDC_REDIRECT_URL")
+
+	oidcProvider *oidc.Provider
+	oidcVerifier *oidc.IDTokenVerifier
+	oauth2Config *oauth2.Config
+
 	store = session.New()
 )
 
-/* hardcoded RBAC
+/*(Hardcoded RBAC)
 type AppUser struct {
 	Email    string
 	Password string
@@ -54,6 +66,12 @@ var users = map[string]AppUser{
 	},
 }
 */
+
+func randomState() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
 
 func main() {
 	// kijkt of het in de env staat
@@ -86,16 +104,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	/*fix om er voor te zorgen dat de juiste realm roles bestaan
-	adminToken, err := getKeycloakAdminToken()
-	if err != nil {
-		log.Fatal("keycloak admin token error:", err)
-	}
-
-	if err := ensureRealmRoles(adminToken, []string{"IT", "HR", "employee"}); err != nil {
-		log.Fatal("failed to ensure realm roles:", err)
-	}
-	*/
+	initOIDC()
 
 	app := fiber.New()
 
@@ -125,47 +134,100 @@ func main() {
 		return c.SendFile("ui/register_device.html")
 	})
 
+	app.Get("/it-admin", requireRole("IT"), func(c *fiber.Ctx) error {
+		return c.SendFile("ui/it_admin.html")
+	})
+
 	app.Get("/login", func(c *fiber.Ctx) error {
-		return c.SendFile("ui/login.html")
-	})
-
-	// frontend naar backend onboarding
-	app.Get("/onboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
-		return c.SendFile("ui/onboard.html")
-	})
-
-	// login
-	app.Post("/login", func(c *fiber.Ctx) error {
-		type LoginBody struct {
-			Email    string `form:"email"`
-			Password string `form:"password"`
-		}
-
-		var body LoginBody
-		if err := c.BodyParser(&body); err != nil {
-			return c.Status(400).SendString("Invalid login body")
-		}
-
-		roles, err := loginWithKeycloak(body.Email, body.Password)
-		if err != nil {
-			log.Println("login error:", err)
-			return c.Status(401).SendString("Invalid Keycloak Login")
-		}
-
-		if len(roles) == 0 {
-			return c.Status(403).SendString("No roles assigned")
-		}
+		state := randomState()
 
 		sess, _ := store.Get(c)
-		sess.Set("email", body.Email)
-		sess.Set("roles", roles)
-		sess.Save()
+		sess.Set("oauth_state", state)
+		if err := sess.Save(); err != nil {
+			log.Println("session save eror:", err)
+		}
+		return c.Redirect(oauth2Config.AuthCodeURL(state))
+	})
+
+	app.Get("/logout", func(c *fiber.Ctx) error {
+		sess, _ := store.Get(c)
+		_ = sess.Destroy()
+		return c.Redirect("/login")
+	})
+
+	app.Get("/callback", func(c *fiber.Ctx) error {
+		//state checken
+		sess, _ := store.Get(c)
+		expected, _ := sess.Get("oauth_state").(string)
+		got := c.Query("state")
+
+		if expected == "" || got == "" || expected != got {
+			return c.Status(401).SendString("invalid state")
+		}
+		sess.Delete("oauth_state")
+		_ = sess.Save()
+
+		// code exchange
+		ctx := context.Background()
+
+		code := c.Query("code")
+		if code == "" {
+			return c.Status(400).SendString("missing code")
+		}
+
+		tok, err := oauth2Config.Exchange(ctx, code)
+		if err != nil {
+			log.Println("token exchange error:", err)
+			return c.Status(401).SendString("token exchange failed")
+		}
+
+		// ID check token
+		rawIDToken, ok := tok.Extra("id_token").(string)
+		if !ok || rawIDToken == "" {
+			return c.Status(401).SendString("no id_token")
+		}
+
+		idToken, err := oidcVerifier.Verify(ctx, rawIDToken)
+		if err != nil {
+			log.Println("id token verify error:", err)
+			return c.Status(401).SendString("invalid id_token")
+		}
+
+		// Claims rollen uit Keycloak halen van de Realm
+		var claims struct {
+			Email             string `json:"email"`
+			PreferredUsername string `json:"preferred_username"`
+			RealmAccess       struct {
+				Roles []string `json:"roles"`
+			} `json:"realm_access"`
+		}
+
+		if err := idToken.Claims(&claims); err != nil {
+			return c.Status(401).SendString("invalid claims")
+		}
+
+		email := claims.Email
+		if email == "" {
+			email = claims.PreferredUsername
+		}
+
+		// Session vullen
+		sess, _ = store.Get(c)
+		sess.Set("email", email)
+		sess.Set("roles", claims.RealmAccess.Roles)
+		if err := sess.Save(); err != nil {
+			log.Println("session save error:", err)
+		}
 
 		return c.Redirect("/")
 	})
 
-	// onboard functie
-	app.Post("/onboard", func(c *fiber.Ctx) error {
+	//onboarding
+	app.Get("/onboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
+		return c.SendFile("ui/onboard.html")
+	})
+
+	app.Post("/onboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		var body struct {
 			Name       string `json:"name" form:"name"`
 			Email      string `json:"email" form:"email"`
@@ -214,7 +276,7 @@ func main() {
 	})
 
 	//offbaording
-	app.Post("/offboard", func(c *fiber.Ctx) error {
+	app.Post("/offboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		var body struct {
 			Email string `json:"email" form:"email"`
 		}
@@ -438,172 +500,142 @@ func disableKeycloakUser(token, userID string) error {
 	return nil
 }
 
-//RBAC
+func initOIDC() {
+	if oidcIssuerURL == "" || oidcClientID == "" || oidcClientSecret == "" || oidcRedirectURL == "" {
+		log.Fatal("OIDC env vars niet correct gezet")
+	}
 
-func loginWithKeycloak(email, password string) ([]string, error) {
-	data := url.Values{}
-	data.Set("client_id", "admin-cli")
-	data.Set("grant_type", "password")
-	data.Set("username", email)
-	data.Set("password", password)
-	data.Set("scope", "openid email profile")
-
-	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", keycloakURL, keycloakRealm)
-	resp, err := http.PostForm(endpoint, data)
+	ctx := context.Background()
+	provider, err := oidc.NewProvider(ctx, oidcIssuerURL)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("login failed: %s", string(body))
+		log.Fatalf("kan OIDC provider niet ophalen: %v", err)
 	}
 
-	var tokenRes struct {
-		AccessToken string `json:"access_token"`
-	}
+	oidcProvider = provider
+	oidcVerifier = provider.Verifier(&oidc.Config{
+		ClientID: oidcClientID,
+	})
 
-	if err := json.NewDecoder(resp.Body).Decode(&tokenRes); err != nil {
-		return nil, err
+	oauth2Config = &oauth2.Config{
+		ClientID:     oidcClientID,
+		ClientSecret: oidcClientSecret,
+		RedirectURL:  oidcRedirectURL,
+		Endpoint:     provider.Endpoint(),
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
-
-	roles, err := extractRolesFromJWT(tokenRes.AccessToken)
-	if err != nil {
-		return nil, err
-	}
-
-	return roles, nil
 }
 
-func extractRolesFromJWT(token string) ([]string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid token format")
-	}
+//RBAC via Keycloak API aka de middelware voor de JWT token
 
-	payloadPart := parts[1]
-
-	// Base64URL decode (zonder padding)
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadPart)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode token payload: %w", err)
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
-	}
-
-	rolesSet := make(map[string]bool)
-
-	// 1) Realm roles
-	if ra, ok := payload["realm_access"].(map[string]interface{}); ok {
-		if rolesRaw, ok := ra["roles"].([]interface{}); ok {
-			for _, r := range rolesRaw {
-				if s, ok := r.(string); ok {
-					rolesSet[s] = true
-				}
-			}
-		}
-	}
-
-	// 2) Client roles (resource_access)
-	if resAcc, ok := payload["resource_access"].(map[string]interface{}); ok {
-		for _, v := range resAcc {
-			if clientRoles, ok := v.(map[string]interface{}); ok {
-				if rolesRaw, ok := clientRoles["roles"].([]interface{}); ok {
-					for _, r := range rolesRaw {
-						if s, ok := r.(string); ok {
-							rolesSet[s] = true
-						}
-					}
-				}
-			}
-		}
-	}
-
-	roles := make([]string, 0, len(rolesSet))
-	for r := range rolesSet {
-		roles = append(roles, r)
-	}
-
-	return roles, nil
+type CurrentUser struct {
+	Email string
+	Roles []string
 }
 
-/*
-
-func getKeycloakUserInfo(token string) ([]string, error) {
-	endpoint := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/userinfo", keycloakURL, keycloakRealm)
-
-	req, err := http.NewRequest("GET", endpoint, nil)
+func getCurrentUser(c *fiber.Ctx) *CurrentUser {
+	sess, err := store.Get(c)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var data map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
+	emailVal := sess.Get("email")
+	if emailVal == nil {
+		return nil
 	}
 
-	realmAcces, ok := data["realm_access"].(map[string]interface{})
-	if !ok {
-		return []string{}, nil
+	email, ok := emailVal.(string)
+	if !ok || email == "" {
+		return nil
 	}
 
-	rolesRaw, ok := realmAcces["roles"].([]interface{})
-	if !ok {
-		return []string{}, nil
-	}
-
+	rolesVal := sess.Get("roles")
 	roles := []string{}
-	for _, r := range rolesRaw {
-		if s, ok := r.(string); ok {
-			roles = append(roles, s)
+
+	switch v := rolesVal.(type) {
+	case []string:
+		roles = v
+	case []interface{}:
+		for _, r := range v {
+			if s, ok := r.(string); ok {
+				roles = append(roles, s)
+			}
 		}
+
 	}
 
-	return roles, nil
-
+	return &CurrentUser{Email: email, Roles: roles}
 }
-
-*/
 
 func requireRole(allowedRoles ...string) fiber.Handler {
-	allowedMap := make(map[string]bool)
+	allowed := make(map[string]bool)
 	for _, r := range allowedRoles {
-		allowedMap[r] = true
+		allowed[r] = true
 	}
 
 	return func(c *fiber.Ctx) error {
-		sess, _ := store.Get(c)
-		rolesVal := sess.Get("roles")
-		if rolesVal == nil {
+		user := getCurrentUser(c)
+		if user == nil {
 			return c.Redirect("/login")
 		}
 
-		roles, ok := rolesVal.([]string)
-		if !ok {
-			return c.Status(403).SendString("Forbidden")
-		}
-
-		for _, r := range roles {
-			if allowedMap[r] {
+		for _, r := range user.Roles {
+			if allowed[r] {
 				return c.Next()
 			}
 		}
 
-		return c.Status(403).SendString("Forbidden")
+		return c.Status(fiber.StatusForbidden).SendString("403 Forbidden")
 	}
 }
+
+//RBAC Hardcoded
+
+/*
+
+func getCurrentUser(c *fiber.Ctx) *AppUser {
+	sess, err := store.Get(c)
+	if err != nil {
+		return nil
+	}
+
+	emailVal := sess.Get("email")
+	if emailVal == nil {
+		return nil
+	}
+
+	email, ok := emailVal.(string)
+	if !ok || email == "" {
+		return nil
+	}
+
+	u, ok := users[email]
+	if !ok {
+		return nil
+	}
+
+	return &u
+}
+
+func requireRole(allowedRoles ...string) fiber.Handler {
+	allowed := make(map[string]bool)
+	for _, r := range allowedRoles {
+		allowed[r] = true
+	}
+
+	return func(c *fiber.Ctx) error {
+		user := getCurrentUser(c)
+		if user == nil {
+			return c.Redirect("/login")
+		}
+
+		if !allowed[user.Role] {
+			return c.Status(fiber.StatusForbidden).SendString("403 Forbidden")
+		}
+
+		return c.Next()
+	}
+}
+*/
 
 /* Voor SSO
 	oidcIssuerURL = os.Getenv("OIDC_ISSUER_URL")
@@ -624,25 +656,4 @@ type UserSession struct {
 	Email string `json:"email"`
 	Roles []string `json:"roles"`
 }
-*/
-
-/* Hardcoded rbac functie =
-func getCurrentUser(c *fiber.Ctx) *AppUser {
-sess, err := store.Get(c)
-if err != nil {
-return nil
- }
-
- emailVal := sess.Get("email")
- if emailVal == nil {
-  return nil
-  }
-
-  email, ok := emailVal.(string)
-  if !ok || email == "" {
-  return nil
-   }
-
-   u, ok := users[email]
-   if !ok { return nil } return &u }
 */

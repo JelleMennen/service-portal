@@ -7,7 +7,7 @@
 <body>
     <h1>Register device</h1>
 
-    <form method ="POST" action="/change-role">
+    <form method ="POST" action="/register-device">
         <div>
             <label for="email">employee email:</label>
             <input id="email" name="email" type="email" required/>
@@ -20,7 +20,7 @@
 
         <div>
             <label for ="os-type">Operating system:</label>
-            <select>
+            <select name="os_type" id="os_type" required></select>
                 <option value="" disabled selected>Kies een OS</option>
                 <option value="Windows">Windows</option>
                 <option value="Linux">Linux</option>
@@ -34,7 +34,7 @@
     <p>Hier komt later het sript met system manager koppeling zodat de gebruiker een echt script kan runnen zodat het divce gekoppeld is aan het systeem voor device managment met endpoints</p>
 
     <textarea id="script_ouput" rows="10" cols="80" readonly>
-        # hier komt de script output
+        hier komt de script output
     </textarea>
 
     <p><a href="/">Terug naar start</a></p>

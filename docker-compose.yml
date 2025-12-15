@@ -14,9 +14,10 @@ services:
     image: quay.io/keycloak/keycloak:23.0.6
     command: start
     environment:
-      KC_HOSTNAME: "localhost"
+      KC_HOSTNAME: "keycloak"
       KC_HOSTNAME_PORT: "8080"
-      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY: edge
       KC_HTTP_ENABLED: "true"
       KC_HTTPS_REQUIRED: "none"
       KC_HOSTNAME_STRICT_HTTPS: "false"

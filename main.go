@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gofiber/fiber/v2"
@@ -499,30 +500,38 @@ func disableKeycloakUser(token, userID string) error {
 
 	return nil
 }
-
 func initOIDC() {
 	if oidcIssuerURL == "" || oidcClientID == "" || oidcClientSecret == "" || oidcRedirectURL == "" {
 		log.Fatal("OIDC env vars niet correct gezet")
 	}
 
 	ctx := context.Background()
-	provider, err := oidc.NewProvider(ctx, oidcIssuerURL)
-	if err != nil {
-		log.Fatalf("kan OIDC provider niet ophalen: %v", err)
+
+	var lastErr error
+	for i := 1; i <= 30; i++ { // 30 pogingen
+		provider, err := oidc.NewProvider(ctx, oidcIssuerURL)
+		if err == nil {
+			oidcProvider = provider
+			oidcVerifier = provider.Verifier(&oidc.Config{
+				ClientID: oidcClientID,
+			})
+			oauth2Config = &oauth2.Config{
+				ClientID:     oidcClientID,
+				ClientSecret: oidcClientSecret,
+				RedirectURL:  oidcRedirectURL,
+				Endpoint:     provider.Endpoint(),
+				Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+			}
+			log.Println("OIDC provider ready")
+			return
+		}
+
+		lastErr = err
+		log.Printf("OIDC provider nog niet ready (%d/30): %v", i, err)
+		time.Sleep(2 * time.Second)
 	}
 
-	oidcProvider = provider
-	oidcVerifier = provider.Verifier(&oidc.Config{
-		ClientID: oidcClientID,
-	})
-
-	oauth2Config = &oauth2.Config{
-		ClientID:     oidcClientID,
-		ClientSecret: oidcClientSecret,
-		RedirectURL:  oidcRedirectURL,
-		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
-	}
+	log.Fatalf("kan OIDC provider niet ophalen na retries: %v", lastErr)
 }
 
 //RBAC via Keycloak API aka de middelware voor de JWT token

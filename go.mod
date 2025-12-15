@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.11
 
 require (
-	github.com/coreos/go-oidc/v3 v3.17.0
+	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/gofiber/fiber/v2 v2.52.10
 	github.com/lib/pq v1.10.9
 	golang.org/x/oauth2 v0.34.0

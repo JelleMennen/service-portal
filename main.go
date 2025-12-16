@@ -84,6 +84,10 @@ func main() {
 
 	app := fiber.New()
 
+	//styling fix
+
+	app.Static("/", "./ui")
+
 	//healthcheck
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.SendString("OK")
@@ -145,7 +149,7 @@ func main() {
 	})
 
 	// onboard functie
-	app.Post("/onboard", func(c *fiber.Ctx) error {
+	app.Post("/onboard", requireRole("HR", "IT"), func(c *fiber.Ctx) error {
 		var body struct {
 			Name       string `json:"name" form:"name"`
 			Email      string `json:"email" form:"email"`
